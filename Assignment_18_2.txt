@@ -1,0 +1,75 @@
+case class Record(Userid: Int, Arrival: String, Departure: String, Transport: String,Distance: Int, Year: Int)
+case class User(Id: Int,Name: String,Age: Int)
+case class Transport(Name: String,Number: Int)
+
+val dataSetHolidays = sc.textFile("hdfs:///user/cloudera/S18_Dataset_Holidays.txt").filter(_.nonEmpty)
+val UserDetails = sc.textFile("hdfs:///user/cloudera/S18_Dataset_User_details.txt").filter(_.nonEmpty)
+val TransportDetails = sc.textFile("hdfs:///user/cloudera/S18_Dataset_Transport.txt").filter(_.nonEmpty)
+
+val dfRecords = dataSetHolidays.map(_.split(",") match{
+case Array(userid,arrival,departure,transport,distance,year) => Record(userid.toInt,arrival,departure,transport,distance.toInt,year.toInt)
+case unexpectedArrayForm => 
+    throw new RuntimeException("Record did not have correct number of fields: " +
+      unexpectedArrayForm.mkString("\t"))
+}).toDF()
+
+val dfUserRecords = UserDetails.map(_.split(",") match{
+case Array(id,name,age) => User(id.toInt,name,age.toInt)
+case unexpectedArrayForm => 
+    throw new RuntimeException("Record did not have correct number of fields: " +
+      unexpectedArrayForm.mkString("\t"))
+}).toDF()
+
+val dfTransportRecords = TransportDetails.map(_.split(",") match{
+case Array (name,number) => Transport(name,number.toInt)
+case unexpectedArrayForm => 
+    throw new RuntimeException("Record did not have correct number of fields: " +
+      unexpectedArrayForm.mkString("\t"))
+}).toDF()
+
+1.dfRecords.groupBy("Arrival","Departure","Year").count().groupBy("Year").agg(max(struct("count", "Arrival","Departure")) as "struct").select($"Year", $"struct.Arrival" as "Arrival", $"struct.Departure" as "Departure",$"struct.count" as "count").show()
++----+-------+---------+-----+                                                  
+|Year|Arrival|Departure|count|
++----+-------+---------+-----+
+|1990|    CHN|      IND|    2|
+|1991|    IND|      RUS|    2|
+|1992|    RUS|      IND|    2|
+|1993|    CHN|      IND|    2|
+|1994|    CHN|      PAK|    1|
++----+-------+---------+-----+
+
+2. val UserName = dfRecords.join(dfUserRecords,dfRecords("Userid") === dfUserRecords("Id"),"Inner")
+
+val TotalJoinedRecords = UserName.join(dfTransportRecords,UserName("Transport") === dfTransportRecords("Name"),"Inner")
+
+TotalJoinedRecords.groupBy("Year").agg(sum($"Number").as("Total_Amount")).show()
++----+------------+                                                             
+|Year|Total_Amount|
++----+------------+
+|1990|        1360|
+|1991|        1530|
+|1992|        1190|
+|1993|        1190|
+|1994|         170|
++----+------------+
+
+3. import org.apache.spark.sql.functions._
+val ageGroup: (Int => String) = (arg: Int) => {
+if (arg < 20) {"Less_than_20"}
+else if ((arg >= 20) && (arg < 35)) {"Between_20_and_35"}
+else {"Above_35"}
+}
+val sqlfunc = udf(ageGroup)
+val AgeGroupRecords = TotalJoinedRecords.withColumn("AgeGroup", sqlfunc(col("Age")))
+
+AgeGroupRecords.groupBy("AgeGroup","Year").count().groupBy("Year").agg(max(struct("count", "AgeGroup")) as "struct").select($"Year", $"struct.AgeGroup" as "AgeGroup",$"struct.count" as "count").show()
++----+-----------------+-----+                                                  
+|Year|         AgeGroup|count|
++----+-----------------+-----+
+|1990|Between_20_and_35|    5|
+|1991|Between_20_and_35|    4|
+|1992|         Above_35|    4|
+|1993|     Less_than_20|    5|
+|1994|Between_20_and_35|    1|
++----+-----------------+-----+
+
